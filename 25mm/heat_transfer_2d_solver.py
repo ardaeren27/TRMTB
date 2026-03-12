@@ -447,7 +447,7 @@ def heat_transfer_2d_solver(
         def rhoC_fun(Tc): return interp1_linear_extrap(T_props, rho_chrom, Tc)
 
     # -------------------- axial probe points (extra traces) --------------------
-    # Track the cells closest to x=199 mm, x=400 mm, and the muzzle tip.
+    # Track the cells closest to x=199 mm, x=400 mm, and x = 1915
     probe_x_m = np.array([0.199, 0.400, 1.915], dtype=float)
     probe_j = np.array([int(np.argmin(np.abs(z - xx))) for xx in probe_x_m], dtype=int)
     probe_z_m = z[probe_j].astype(float)

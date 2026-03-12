@@ -75,8 +75,8 @@ def heat_transfer_2d_solver(
 ) -> Dict[str, Any]:
     print(" {\\__/}")
     print("( • . •)")
-    print("/ > 🥕>  Starting 2-D FV heat solver")
-    user_set_tEnd = False  # Users can pass tEnd_fd. I'm not quite sure what I was thinking when adding this but keep FALSE, otherwise things go wrong (well, sometimes)
+    print("/ > 🥕>  Ballistics Bunny wishes you the best of analyses")
+    user_set_tEnd = False  # Users can pass tEnd_fd. keep FALSE, otherwise things go wrong (well, sometimes)
 
     # Emulate with a heuristic: (So stupid inputs don't break anything, not very sound but works)
     if tEnd_fd != 8e-3:
@@ -448,7 +448,7 @@ def heat_transfer_2d_solver(
 
     # -------------------- axial probe points (extra traces) --------------------
     # Track the cells closest to x=199 mm, x=400 mm, and the muzzle tip.
-    probe_x_m = np.array([0.199, 0.400, float(L)], dtype=float)
+    probe_x_m = np.array([0.199, 0.400, 1.915], dtype=float)
     probe_j = np.array([int(np.argmin(np.abs(z - xx))) for xx in probe_x_m], dtype=int)
     probe_z_m = z[probe_j].astype(float)
     probe_labels = [f"x≈{1e3*probe_z_m[k]:.1f} mm" for k in range(probe_j.size)]

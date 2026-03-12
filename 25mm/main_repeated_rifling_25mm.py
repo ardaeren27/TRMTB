@@ -44,7 +44,7 @@ def main():
         use_30col=use_30col,
         plot=True,
         smoke_test=False,  # smoke_test used in MATLAB, irrelevant here so keep FALSE
-        ib_plot=False,     # Opt: Wanna print ballistics plot when initiating HT-solver?, advised FALSE. Run interior_ballistics first to check BC params
+        ib_plot=True,     # Opt: Wanna print ballistics plot when initiating HT-solver?, advised FALSE. Run interior_ballistics first to check BC params
     )
 
     print(f"Launching 2-D FV solver with staged dt (dt_fd={dt_fd:.3g}, dt_tail={dt_tail:.3g}, tail={cool_tail_s:.1f} s)...")

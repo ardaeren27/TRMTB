@@ -30,8 +30,8 @@ def main():
     debug_strd = 10          # Debug print stride
 
     # repeated schedule
-    Nshots = 28               # Number of shots taken
-    cool_gap = 0.25           # Time elapsed between consecutive shots [s]
+    Nshots = 28              # Number of shots taken
+    cool_gap = 0             # Time elapsed between consecutive shots [s]
     Tamb_C = 20.0            # Ambient temp [C]
     use_30col = False        # Irrelevant, but I'm too lazy to remove
 
@@ -43,7 +43,7 @@ def main():
         use_30col=use_30col,
         plot=True,
         smoke_test=False,  # smoke_test used in MATLAB, irrelevant here so keep FALSE
-        ib_plot=False,     # Opt: Wanna print ballistics plot when initiating HT-solver?, advised FALSE. Run interior_ballistics first to check BC params
+        ib_plot=True,     # Opt: Wanna print ballistics plot when initiating HT-solver?, advised FALSE. Run interior_ballistics first to check BC params
     )
 
     print(f"Launching 2-D FV solver with staged dt (dt_fd={dt_fd:.3g}, dt_tail={dt_tail:.3g}, tail={cool_tail_s:.1f} s)...")

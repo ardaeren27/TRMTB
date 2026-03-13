@@ -660,7 +660,7 @@ def _simulate_exit_velocity(f_scale: float, r1_scale: float, dt: float, t_end: f
     params = build_25mm_params(f_scale=f_scale, p_start_override=p_start,
                                l0_override_m=l0_override_m, r1_scale=r1_scale,
                                V0_override=V0_override)
-    res = interior_ballistics_25mm(dt=dt, t_end=t_end, plot=False, debug=False, params=params)
+    res = interior_ballistics_25mm(dt=dt, t_end=t_end, plot=False, debug=True, params=params)
     v_exit = float(np.max(res["velocityP"]))
     return v_exit, res
 
@@ -863,7 +863,7 @@ def calibrate_25mm_landmarks(
                 V0_override=float(V0o),
                 f_low=0.3,
                 f_high=8.0,
-                calib_debug=False,
+                calib_debug=True,
             )
             m = extract_metrics(res)
             sc = score_metrics(m, ref)
@@ -896,7 +896,7 @@ def calibrate_25mm_landmarks(
 _REFERENCE_25MM_PARAMS_CACHE: IBParams | None = None
 
 
-def get_reference_25mm_params(*, force_recompute: bool = False, calib_debug: bool = False) -> IBParams:
+def get_reference_25mm_params(*, force_recompute: bool = False, calib_debug: bool = True) -> IBParams:
     """
     Return the authoritative calibrated 25 mm parameter set used by the
     standalone script. This is the single source of truth for downstream
@@ -922,8 +922,8 @@ def get_reference_25mm_params(*, force_recompute: bool = False, calib_debug: boo
 
 
 def run_reference_25mm_ib(*, dt: float = 1e-6, t_end: float = 0.03, plot: bool = True,
-                          debug: bool = False, force_recompute_params: bool = False,
-                          calib_debug: bool = False) -> Dict[str, Any]:
+                          debug: bool = True, force_recompute_params: bool = False,
+                          calib_debug: bool = True) -> Dict[str, Any]:
     """
     Run the authoritative calibrated 25 mm IB workflow first, then return the
     single-shot result for BC construction.

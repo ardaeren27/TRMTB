@@ -27,14 +27,14 @@ def main():
 # Other Parameters
     thetaFD = 1.0            # Finite difference solver theta (=1 for Backwards Euler, advised)
     debug = True             # Opt: Debug prints (True => Verbose; False => Silent)
-    debug_strd = 10          # Debug print stride
+    debug_strd = 1          # Debug print stride
 
     # repeated schedule (set burst-by-burst rate and cooldown)
     shot_plan = [
-        {"shots": 9, "spm": 200, "pause_s": 750.0},          # 9 rounds @200 spm, wait 75 s
-        #{"shots": 15, "spm": 600, "pause_s": 20 * 60.0},   # 15 rounds @600 spm, wait 20 min
+        #{"shots": 9, "spm": 200, "pause_s": 750.0},          # 9 rounds @200 spm, wait 75 s
+        {"shots": 1, "spm": 100, "pause_s": 2},
     ]
-    Tamb_C = 20.0            # Ambient temp [C]
+    Tamb_C = 25.0            # Ambient temp [C]
     use_30col = False        # Irrelevant, but I'm too lazy to remove
 
     # ------------ build BC ------------

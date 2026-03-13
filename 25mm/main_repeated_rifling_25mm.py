@@ -34,7 +34,7 @@ def main():
         {"shots": 9, "spm": 200, "pause_s": 750.0},          # 9 rounds @200 spm, wait 75 s
         #{"shots": 15, "spm": 600, "pause_s": 20 * 60.0},   # 15 rounds @600 spm, wait 20 min
     ]
-    Tamb_C = 35.0            # Ambient temp [C]
+    Tamb_C = 25.0            # Ambient temp [C]
     use_30col = False        # Irrelevant, but I'm too lazy to remove
 
     # ------------ build BC ------------

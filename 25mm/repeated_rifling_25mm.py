@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 from utils import unique_stable, QuietStdout
 
-from interior_ballistics_25mm import interior_ballistics_25mm as interior_ballistics
+from interior_ballistics_25mm import run_reference_25mm_ib
 from heat_transfer_2d_solver import heat_transfer_2d_solver
 
 
@@ -182,6 +182,7 @@ def rifling_schedule_bc(single: Dict[str, Any], shot_gaps_s: Sequence[float], *,
             "plan": plan_meta,
             "tau_purge": float(tau_purge),
             "h_in": float(h_in),
+            "ib_source": "run_reference_25mm_ib",
         },
     }
 
@@ -221,8 +222,10 @@ def repeated_rifling(
         if int(Nshots) < 1 or int(Nshots) != Nshots:
             raise ValueError("Nshots must be a positive integer.")
 
-    # ---------- 1) single-shot interior ballistics ----------
-    ib = interior_ballistics(plot=ib_plot, debug=ib_debug)
+    # ---------- 1) authoritative single-shot interior ballistics ----------
+    # Run the calibrated IB workflow first, then construct repeated-shot BCs from
+    # that actual IB output. No alternate/default ballistic branch is used here.
+    ib = run_reference_25mm_ib(plot=ib_plot, debug=ib_debug)
     t1 = np.asarray(ib["timeVec"], dtype=float).reshape(-1)
     h1 = np.asarray(ib["hHist"], dtype=float)
     Tg1K = np.asarray(ib["Tgas"], dtype=float).reshape(-1)

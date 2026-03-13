@@ -34,7 +34,6 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
 from utils import EPS, unique_stable, interp1_linear_extrap, interp1_linear_extrap_matrix, print_solver_banner
-from interior_ballistics_25mm import interior_ballistics_25mm as interior_ballistics
 
 
 def _arange_inclusive(start: float, step: float, stop: float) -> np.ndarray:
@@ -291,15 +290,15 @@ def heat_transfer_2d_solver(
 
     # -------------------- boundary conditions --------------------
     print("Loading boundary conditions...")
-    if bc is not None:
-        t_ib = np.asarray(bc["t"], dtype=float).reshape(-1)
-        h_data = np.asarray(bc["h"], dtype=float)
-        Tgas_in = np.asarray(bc["Tg"], dtype=float).reshape(-1)
-    else:
-        ib = interior_ballistics(plot=False, debug=False)
-        t_ib = np.asarray(ib["timeVec"], dtype=float).reshape(-1)
-        h_data = np.asarray(ib["hHist"], dtype=float)
-        Tgas_in = np.asarray(ib["Tgas"], dtype=float).reshape(-1)
+    if bc is None:
+        raise ValueError(
+            "heat_transfer_2d_solver requires explicit boundary conditions 'bc'. "
+            "Run the 25 mm IB workflow first via repeated_rifling(...), then pass the returned BC dict."
+        )
+
+    t_ib = np.asarray(bc["t"], dtype=float).reshape(-1)
+    h_data = np.asarray(bc["h"], dtype=float)
+    Tgas_in = np.asarray(bc["Tg"], dtype=float).reshape(-1)
 
     # Convert K->°C if it is needed (for some reason, idk)
     if np.median(Tgas_in) > 200.0:
@@ -746,5 +745,7 @@ def heat_transfer_2d_solver(
 
 
 if __name__ == "__main__":
-    # quick run using single-shot BC
-    heat_transfer_2d_solver(Nr=80, Nz=60, plot=True, debug=True, debug_stride=100, flux_check=False)
+    from repeated_rifling_25mm import repeated_rifling
+
+    bc = repeated_rifling(plot=False, smoke_test=False, ib_plot=False, ib_debug=False)
+    heat_transfer_2d_solver(Nr=80, Nz=60, plot=True, debug=True, debug_stride=100, flux_check=False, bc=bc)

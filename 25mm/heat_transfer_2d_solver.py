@@ -105,7 +105,7 @@ def heat_transfer_2d_solver(
     if ("32CR" in steel_tag) or (steel_tag in {"32CRMOV12-28", "32CRMOV1228"}):
         # ---------------- 25 mm geometry ----------------
         Rin = 0.0125
-        T0 = 25.0
+        T0 = 20.0
         hout = 9.2
 
         # Convective zones: match the 25 mm IB scaling used in interior_ballistics_25mm.py

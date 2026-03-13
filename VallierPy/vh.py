@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import re
 
 # numpy compat
 if not hasattr(np, "trapezoid"):
@@ -351,6 +352,9 @@ WARNING     = "#b0742f"
 DANGER      = "#c63d4e"
 PILL_BG     = "#f9edf2"
 PILL_NEUTRAL = "#f2f2f7"
+DIALOG_HEADER = "#f6f6f9"
+DIALOG_BORDER = "#d9d9e3"
+DIALOG_SHADOW = "#d1d1db"
 
 PLOT_BG     = "#ffffff"
 PLOT_FACE   = "#ffffff"
@@ -521,6 +525,13 @@ class VallierApp:
         self.plot_tabs = {}
         self.page_frames = {}
         self.tab_buttons = {}
+        self.plot_builders = {}
+        self.plot_meta = {}
+        self.active_scroll_canvas = None
+        home = Path.home()
+        desktop = home / "Desktop"
+        self.last_export_dir = desktop if desktop.exists() else home
+        self.last_figure_dir = self.last_export_dir
         self.user_presets = self._load_user_presets()
         self.all_presets = {}
         self._rebuild_preset_store()
@@ -580,18 +591,27 @@ class VallierApp:
             background=[("selected", CARD_BG), ("active", CARD_BG_2)],
             foreground=[("selected", TEXT), ("active", TEXT)],
         )
+        style.layout(
+            "Minimal.Vertical.TScrollbar",
+            [("Vertical.Scrollbar.trough", {"children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})], "sticky": "ns"})],
+        )
         style.configure(
             "Minimal.Vertical.TScrollbar",
-            background="#c8c8d3",
-            troughcolor=PILL_NEUTRAL,
-            bordercolor=PILL_NEUTRAL,
-            lightcolor="#c8c8d3",
-            darkcolor="#c8c8d3",
-            arrowcolor=TEXT_FAINT,
-            arrowsize=10,
+            background="#cfd0da",
+            troughcolor="#f4f4f8",
+            bordercolor="#f4f4f8",
+            lightcolor="#cfd0da",
+            darkcolor="#cfd0da",
+            arrowcolor="#f4f4f8",
+            arrowsize=0,
             gripcount=0,
             relief="flat",
             borderwidth=0,
+            width=10,
+        )
+        style.map(
+            "Minimal.Vertical.TScrollbar",
+            background=[("active", "#bdbeca"), ("pressed", "#aaabb7")],
         )
 
 
@@ -674,9 +694,10 @@ class VallierApp:
         self.status_pill = self._pill(right, "Ready", bg=PILL_NEUTRAL, fg=TEXT_SOFT, padx=14, pady=7)
         self.status_pill.pack(side="right", padx=(12, 0))
 
-        self.export_button = tk.Menubutton(
+        self.export_button = tk.Button(
             right,
-            text="Export Results",
+            text="Export",
+            command=self._open_export_sheet,
             bg=PILL_NEUTRAL,
             fg=TEXT,
             activebackground="#e9e9ef",
@@ -688,13 +709,7 @@ class VallierApp:
             padx=18,
             pady=11,
             cursor="hand2",
-            direction="below",
         )
-        self.export_button.menu = tk.Menu(self.export_button, tearoff=0, bg="#ffffff", fg=TEXT, activebackground=PILL_BG, activeforeground=TEXT)
-        self.export_button["menu"] = self.export_button.menu
-        self.export_button.menu.add_command(label="Export as XML", command=self._export_results_xml)
-        self.export_button.menu.add_command(label="Export as JSON", command=self._export_results_json)
-        self.export_button.menu.add_command(label="Export CSV bundle", command=self._export_results_csv_bundle)
         self.export_button.pack(side="right", padx=(0, 10))
 
         self.run_button = tk.Button(
@@ -826,6 +841,8 @@ class VallierApp:
 
         self.param_inner.bind("<Configure>", self._on_param_inner_configure)
         self.param_canvas.bind("<Configure>", self._on_param_canvas_configure)
+        self.param_canvas.bind("<Enter>", lambda _e: self._set_active_scroll_canvas(self.param_canvas), add="+")
+        self.param_inner.bind("<Enter>", lambda _e: self._set_active_scroll_canvas(self.param_canvas), add="+")
 
         meta_map = {key: (label, unit) for key, label, unit in PARAM_META}
 
@@ -992,6 +1009,8 @@ class VallierApp:
         self.summary_canvas_window = self.summary_canvas.create_window((0, 0), window=self.summary_inner, anchor="nw")
         self.summary_inner.bind("<Configure>", self._on_summary_inner_configure)
         self.summary_canvas.bind("<Configure>", self._on_summary_canvas_configure)
+        self.summary_canvas.bind("<Enter>", lambda _e: self._set_active_scroll_canvas(self.summary_canvas), add="+")
+        self.summary_inner.bind("<Enter>", lambda _e: self._set_active_scroll_canvas(self.summary_canvas), add="+")
 
         for title, key in tabs[1:]:
             page = tk.Frame(self.page_host, bg=WINDOW_BG)
@@ -1017,6 +1036,9 @@ class VallierApp:
         self.root.bind_all("<Button-4>", self._on_mousewheel, add="+")
         self.root.bind_all("<Button-5>", self._on_mousewheel, add="+")
 
+    def _set_active_scroll_canvas(self, canvas):
+        self.active_scroll_canvas = canvas
+
     def _resolve_scroll_canvas(self, widget):
         current = widget
         while current is not None:
@@ -1028,7 +1050,12 @@ class VallierApp:
         return None
 
     def _on_mousewheel(self, event):
-        canvas = self._resolve_scroll_canvas(event.widget)
+        hovered = None
+        try:
+            hovered = self.root.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            hovered = None
+        canvas = self._resolve_scroll_canvas(hovered or event.widget) or self.active_scroll_canvas
         if canvas is None:
             return
 
@@ -1037,9 +1064,13 @@ class VallierApp:
         elif getattr(event, "num", None) == 5:
             delta = 1
         elif sys.platform == "darwin":
-            delta = -1 * int(event.delta)
+            raw = int(event.delta or 0)
+            delta = -1 if raw > 0 else (1 if raw < 0 else 0)
         else:
-            delta = -1 * int((event.delta or 0) / 120)
+            raw = int(event.delta or 0)
+            if raw == 0:
+                return
+            delta = -1 if raw > 0 else 1
 
         if delta:
             canvas.yview_scroll(delta, "units")
@@ -1132,7 +1163,7 @@ class VallierApp:
             messagebox.showerror("Preset Error", str(exc))
             return
 
-        name = simpledialog.askstring("Save Preset", "Preset name:", parent=self.root)
+        name = self._prompt_text_value("Save Preset", "Preset name", initial_value=self.current_preset_name if self.current_preset_name not in AMMO_PRESETS else "")
         if name is None:
             return
         name = name.strip()
@@ -1255,12 +1286,12 @@ class VallierApp:
         payload = self._results_export_payload()
         if payload is None:
             return
-        path = filedialog.asksaveasfilename(
-            parent=self.root,
-            title="Export Results as XML",
-            defaultextension=".xml",
-            filetypes=[("XML files", "*.xml")],
-            initialfile="vallier_results.xml",
+        path = self._prompt_save_file(
+            "Export Results",
+            "XML export",
+            default_filename="vallier_results.xml",
+            extension=".xml",
+            initial_dir=self.last_export_dir,
         )
         if not path:
             return
@@ -1296,18 +1327,19 @@ class VallierApp:
         except Exception:
             pass
         tree.write(path, encoding="utf-8", xml_declaration=True)
+        self.last_export_dir = Path(path).parent
         self._set_status("XML EXPORTED", tone="success")
 
     def _export_results_json(self):
         payload = self._results_export_payload()
         if payload is None:
             return
-        path = filedialog.asksaveasfilename(
-            parent=self.root,
-            title="Export Results as JSON",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json")],
-            initialfile="vallier_results.json",
+        path = self._prompt_save_file(
+            "Export Results",
+            "JSON export",
+            default_filename="vallier_results.json",
+            extension=".json",
+            initial_dir=self.last_export_dir,
         )
         if not path:
             return
@@ -1318,19 +1350,26 @@ class VallierApp:
             "results": {k: self._serialize_value(v) for k, v in self.results.items()},
         }
         Path(path).write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+        self.last_export_dir = Path(path).parent
         self._set_status("JSON EXPORTED", tone="success")
 
     def _export_results_csv_bundle(self):
         payload = self._results_export_payload()
         if payload is None:
             return
-        root_dir = filedialog.askdirectory(parent=self.root, title="Choose export folder")
-        if not root_dir:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_dir_path = self._prompt_export_directory(
+            "Export Results",
+            "CSV bundle export",
+            default_folder=f"vallier_export_{stamp}",
+            initial_dir=self.last_export_dir,
+        )
+        if not export_dir_path:
             return
 
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_dir = Path(root_dir) / f"vallier_export_{stamp}"
+        export_dir = Path(export_dir_path)
         export_dir.mkdir(parents=True, exist_ok=True)
+        self.last_export_dir = export_dir.parent
 
         (export_dir / "metadata.json").write_text(json.dumps(payload["metadata"], indent=2), encoding="utf-8")
 
@@ -1364,6 +1403,356 @@ class VallierApp:
                         writer.writerow([f"{float(v):.12g}" for v in flat_row])
 
         self._set_status("CSV BUNDLE EXPORTED", tone="success")
+
+    # ------------------------------------------------------------------
+    #  CUSTOM DIALOGS / EXPORT UX
+    # ------------------------------------------------------------------
+
+    def _center_dialog(self, dlg, width, height):
+        self.root.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_w = max(self.root.winfo_width(), width)
+        root_h = max(self.root.winfo_height(), height)
+        x = root_x + (root_w - width) // 2
+        y = root_y + (root_h - height) // 2
+        dlg.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _dialog_button(self, parent, text, command, primary=False, danger=False, width=11):
+        if primary:
+            bg, fg, active = ACCENT, "#ffffff", ACCENT_3
+        elif danger:
+            bg, fg, active = "#faecef", DANGER, "#f5dde3"
+        else:
+            bg, fg, active = PILL_NEUTRAL, TEXT, "#e9e9ef"
+        btn = tk.Button(
+            parent, text=text, command=command, bg=bg, fg=fg, activebackground=active, activeforeground=fg,
+            relief="flat", bd=0, highlightthickness=0, font=("Segoe UI", 10, "bold"), padx=14, pady=10,
+            cursor="hand2", width=width,
+        )
+        return btn
+
+    def _create_modal(self, title, subtitle="", width=520, height=300):
+        dlg = tk.Toplevel(self.root)
+        dlg.withdraw()
+        dlg.overrideredirect(True)
+        dlg.transient(self.root)
+        dlg.configure(bg=DIALOG_SHADOW)
+
+        outer = tk.Frame(dlg, bg=DIALOG_SHADOW, padx=2, pady=2)
+        outer.pack(fill="both", expand=True)
+
+        panel = tk.Frame(outer, bg=CARD_BG, highlightthickness=1, highlightbackground=DIALOG_BORDER, bd=0)
+        panel.pack(fill="both", expand=True)
+
+        header = tk.Frame(panel, bg=DIALOG_HEADER, padx=18, pady=14)
+        header.pack(fill="x")
+
+        dots = tk.Frame(header, bg=DIALOG_HEADER)
+        dots.pack(side="left")
+        for color in ("#f4bf2a", "#32c345", "#ff6057"):
+            c = tk.Canvas(dots, width=12, height=12, bg=DIALOG_HEADER, highlightthickness=0)
+            c.create_oval(1, 1, 11, 11, fill=color, outline=color)
+            c.pack(side="left", padx=(0, 7))
+
+        title_box = tk.Frame(header, bg=DIALOG_HEADER)
+        title_box.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(title_box, text=title, bg=DIALOG_HEADER, fg=TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        if subtitle:
+            tk.Label(title_box, text=subtitle, bg=DIALOG_HEADER, fg=TEXT_SOFT, font=("Segoe UI", 9)).pack(anchor="w", pady=(3, 0))
+
+        body = tk.Frame(panel, bg=CARD_BG, padx=22, pady=18)
+        body.pack(fill="both", expand=True)
+
+        footer = tk.Frame(panel, bg=CARD_BG, padx=22, pady=18)
+        footer.pack(fill="x")
+
+        def close():
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+
+        def start_drag(event):
+            dlg._drag_origin = (event.x_root, event.y_root, dlg.winfo_x(), dlg.winfo_y())
+
+        def on_drag(event):
+            if not hasattr(dlg, "_drag_origin"):
+                return
+            x0, y0, win_x, win_y = dlg._drag_origin
+            dx = event.x_root - x0
+            dy = event.y_root - y0
+            dlg.geometry(f"+{win_x + dx}+{win_y + dy}")
+
+        for widget in (header, title_box):
+            widget.bind("<ButtonPress-1>", start_drag, add="+")
+            widget.bind("<B1-Motion>", on_drag, add="+")
+
+        dlg.bind("<Escape>", lambda _e: close())
+        self._center_dialog(dlg, width, height)
+        dlg.deiconify()
+        dlg.grab_set()
+        return dlg, body, footer, close
+
+    def _path_chip_row(self, parent, var):
+        row = tk.Frame(parent, bg=CARD_BG)
+        row.pack(fill="x", pady=(8, 0))
+        candidates = [
+            ("Home", Path.home()),
+            ("Desktop", Path.home() / "Desktop"),
+            ("Documents", Path.home() / "Documents"),
+            ("Project", Path.cwd()),
+        ]
+        for label, path in candidates:
+            if not path.exists() and label != "Project":
+                continue
+            btn = tk.Button(
+                row, text=label, command=lambda p=path: var.set(str(p)), bg=PILL_NEUTRAL, fg=TEXT_SOFT,
+                activebackground="#e9e9ef", activeforeground=TEXT, relief="flat", bd=0, highlightthickness=0,
+                font=("Segoe UI", 9, "bold"), padx=10, pady=6, cursor="hand2"
+            )
+            btn.pack(side="left", padx=(0, 8))
+
+    def _prompt_text_value(self, title, label, initial_value=""):
+        dlg, body, footer, close = self._create_modal(title, "Custom preset", width=460, height=220)
+        result = {"value": None}
+        error_var = tk.StringVar(value="")
+        value_var = tk.StringVar(value=initial_value)
+
+        tk.Label(body, text=label, bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        entry = tk.Entry(
+            body, textvariable=value_var, bg="#ffffff", fg=TEXT, insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=STROKE, highlightcolor=ACCENT, font=("Segoe UI", 12),
+        )
+        entry.pack(fill="x", pady=(10, 6), ipady=10)
+        tk.Label(body, textvariable=error_var, bg=CARD_BG, fg=DANGER, font=("Segoe UI", 9)).pack(anchor="w")
+
+        def commit():
+            text = value_var.get().strip()
+            if not text:
+                error_var.set("Enter a preset name.")
+                return
+            result["value"] = text
+            close()
+
+        self._dialog_button(footer, "Cancel", close).pack(side="right")
+        self._dialog_button(footer, "Save", commit, primary=True).pack(side="right", padx=(0, 10))
+        entry.bind("<Return>", lambda _e: commit())
+        entry.focus_set()
+        dlg.wait_window()
+        return result["value"]
+
+    def _prompt_save_file(self, title, subtitle, default_filename, extension, initial_dir=None):
+        dlg, body, footer, close = self._create_modal(title, subtitle, width=560, height=320)
+        result = {"path": None}
+        error_var = tk.StringVar(value="")
+        directory_var = tk.StringVar(value=str(initial_dir or self.last_export_dir))
+        filename_var = tk.StringVar(value=default_filename)
+
+        tk.Label(body, text="Directory", bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        dir_entry = tk.Entry(
+            body, textvariable=directory_var, bg="#ffffff", fg=TEXT, insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=STROKE, highlightcolor=ACCENT, font=("Segoe UI", 11),
+        )
+        dir_entry.pack(fill="x", pady=(8, 0), ipady=9)
+        self._path_chip_row(body, directory_var)
+
+        tk.Label(body, text="Filename", bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(18, 0))
+        name_entry = tk.Entry(
+            body, textvariable=filename_var, bg="#ffffff", fg=TEXT, insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=STROKE, highlightcolor=ACCENT, font=("Segoe UI", 11),
+        )
+        name_entry.pack(fill="x", pady=(8, 0), ipady=9)
+        tk.Label(body, text=f"The extension {extension} is added automatically if needed.", bg=CARD_BG, fg=TEXT_FAINT, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+        tk.Label(body, textvariable=error_var, bg=CARD_BG, fg=DANGER, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+
+        def commit():
+            folder_text = directory_var.get().strip()
+            filename = filename_var.get().strip()
+            if not folder_text:
+                error_var.set("Enter a directory.")
+                return
+            if not filename:
+                error_var.set("Enter a filename.")
+                return
+            if extension and not filename.lower().endswith(extension.lower()):
+                filename += extension
+            try:
+                folder = Path(folder_text).expanduser()
+                folder.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                error_var.set(f"Cannot create directory: {exc}")
+                return
+            result["path"] = str(folder / filename)
+            close()
+
+        self._dialog_button(footer, "Cancel", close).pack(side="right")
+        self._dialog_button(footer, "Save", commit, primary=True).pack(side="right", padx=(0, 10))
+        name_entry.bind("<Return>", lambda _e: commit())
+        name_entry.focus_set()
+        dlg.wait_window()
+        return result["path"]
+
+    def _prompt_export_directory(self, title, subtitle, default_folder, initial_dir=None):
+        dlg, body, footer, close = self._create_modal(title, subtitle, width=560, height=320)
+        result = {"path": None}
+        error_var = tk.StringVar(value="")
+        directory_var = tk.StringVar(value=str(initial_dir or self.last_export_dir))
+        folder_var = tk.StringVar(value=default_folder)
+
+        tk.Label(body, text="Parent directory", bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        dir_entry = tk.Entry(
+            body, textvariable=directory_var, bg="#ffffff", fg=TEXT, insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=STROKE, highlightcolor=ACCENT, font=("Segoe UI", 11),
+        )
+        dir_entry.pack(fill="x", pady=(8, 0), ipady=9)
+        self._path_chip_row(body, directory_var)
+
+        tk.Label(body, text="Export folder name", bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(18, 0))
+        name_entry = tk.Entry(
+            body, textvariable=folder_var, bg="#ffffff", fg=TEXT, insertbackground=ACCENT, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground=STROKE, highlightcolor=ACCENT, font=("Segoe UI", 11),
+        )
+        name_entry.pack(fill="x", pady=(8, 0), ipady=9)
+        tk.Label(body, text="A new export folder is created automatically.", bg=CARD_BG, fg=TEXT_FAINT, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+        tk.Label(body, textvariable=error_var, bg=CARD_BG, fg=DANGER, font=("Segoe UI", 9)).pack(anchor="w", pady=(8, 0))
+
+        def commit():
+            parent_text = directory_var.get().strip()
+            folder_name = folder_var.get().strip()
+            if not parent_text:
+                error_var.set("Enter a parent directory.")
+                return
+            if not folder_name:
+                error_var.set("Enter an export folder name.")
+                return
+            try:
+                parent_dir = Path(parent_text).expanduser()
+                parent_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                error_var.set(f"Cannot create parent directory: {exc}")
+                return
+            result["path"] = str(parent_dir / folder_name)
+            close()
+
+        self._dialog_button(footer, "Cancel", close).pack(side="right")
+        self._dialog_button(footer, "Export", commit, primary=True).pack(side="right", padx=(0, 10))
+        name_entry.bind("<Return>", lambda _e: commit())
+        name_entry.focus_set()
+        dlg.wait_window()
+        return result["path"]
+
+    def _open_export_sheet(self):
+        payload = self._results_export_payload()
+        if payload is None:
+            return
+        dlg, body, footer, close = self._create_modal("Export Results", "Choose an output package", width=620, height=260)
+        cards = tk.Frame(body, bg=CARD_BG)
+        cards.pack(fill="both", expand=True)
+
+        options = [
+            ("XML", "Structured tree with scalars and arrays.", self._export_results_xml),
+            ("JSON", "Single portable file for scripting or post-processing.", self._export_results_json),
+            ("CSV Bundle", "Metadata plus scalar and array tables in a folder.", self._export_results_csv_bundle),
+        ]
+
+        for idx, (name, desc, command) in enumerate(options):
+            card = tk.Frame(cards, bg=CARD_BG_2, highlightthickness=1, highlightbackground=STROKE_SOFT, bd=0, padx=16, pady=16)
+            card.pack(side="left", fill="both", expand=True, padx=(0 if idx == 0 else 10, 0))
+            tk.Label(card, text=name, bg=CARD_BG_2, fg=TEXT, font=("Segoe UI", 12, "bold")).pack(anchor="w")
+            tk.Label(card, text=desc, bg=CARD_BG_2, fg=TEXT_SOFT, font=("Segoe UI", 9), wraplength=160, justify="left").pack(anchor="w", pady=(8, 14))
+            self._dialog_button(card, f"Export {name}", lambda cmd=command: (close(), cmd()), primary=(name == "XML"), width=14).pack(anchor="w")
+
+        self._dialog_button(footer, "Close", close).pack(side="right")
+        dlg.wait_window()
+
+    def _sanitize_filename(self, text):
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", text.strip()).strip("_").lower()
+        return slug or "figure"
+
+    def _save_figure_dialog(self, fig, title):
+        default_name = f"{self._sanitize_filename(title)}.png"
+        path = self._prompt_save_file(
+            "Save Figure",
+            title,
+            default_filename=default_name,
+            extension=".png",
+            initial_dir=self.last_figure_dir,
+        )
+        if not path:
+            return
+        try:
+            fig.savefig(path, dpi=180, bbox_inches="tight", facecolor=fig.get_facecolor())
+        except Exception as exc:
+            messagebox.showerror("Save Figure", f"Could not save the figure:\n{exc}")
+            return
+        self.last_figure_dir = Path(path).parent
+        self._set_status("FIGURE SAVED", tone="success")
+
+    def _open_plot_window(self, tab_key):
+        builder = self.plot_builders.get(tab_key)
+        meta = self.plot_meta.get(tab_key)
+        if builder is None or meta is None:
+            return
+
+        title, subtitle = meta
+        fig = builder()
+
+        win = tk.Toplevel(self.root)
+        win.title(f"{title} — Vallier–Heydenreich")
+        win.configure(bg=WINDOW_BG)
+        win.geometry("1420x900")
+        win.minsize(980, 680)
+
+        shell = self._card(win, bg=CARD_BG, border=STROKE, padx=20, pady=20)
+        shell.pack(fill="both", expand=True, padx=18, pady=18)
+
+        head = tk.Frame(shell, bg=CARD_BG)
+        head.pack(fill="x")
+
+        left = tk.Frame(head, bg=CARD_BG)
+        left.pack(side="left", fill="x", expand=True)
+        tk.Label(left, text=title, bg=CARD_BG, fg=TEXT, font=("Segoe UI", 19, "bold")).pack(anchor="w")
+        tk.Label(left, text=subtitle, bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10)).pack(anchor="w", pady=(5, 0))
+
+        figure_host = tk.Frame(shell, bg=PLOT_FACE, highlightthickness=1, highlightbackground=STROKE_SOFT, bd=0)
+        figure_host.pack(fill="both", expand=True, pady=(16, 0))
+
+        canvas = FigureCanvasTkAgg(fig, master=figure_host)
+        toolbar = NavigationToolbar2Tk(canvas, figure_host, pack_toolbar=False)
+
+        tool_row = tk.Frame(head, bg=CARD_BG)
+        tool_row.pack(side="right", anchor="n")
+
+        def tool_button(label, command):
+            btn = tk.Button(
+                tool_row, text=label, command=command, bg=PILL_NEUTRAL, fg=TEXT, activebackground="#e9e9ef",
+                activeforeground=TEXT, relief="flat", bd=0, highlightthickness=0, font=("Segoe UI", 9, "bold"),
+                padx=12, pady=8, cursor="hand2"
+            )
+            btn.pack(side="left", padx=(8, 0))
+            return btn
+
+        def sync_mode():
+            mode = str(getattr(toolbar, "mode", "")).upper()
+            pan_active = "PAN" in mode
+            zoom_active = "ZOOM" in mode
+            pan_btn.configure(bg=(PILL_BG if pan_active else PILL_NEUTRAL), fg=(ACCENT if pan_active else TEXT))
+            zoom_btn.configure(bg=(PILL_BG if zoom_active else PILL_NEUTRAL), fg=(ACCENT if zoom_active else TEXT))
+
+        tool_button("Home", lambda: (toolbar.home(), sync_mode()))
+        tool_button("Back", lambda: (toolbar.back(), sync_mode()))
+        tool_button("Forward", lambda: (toolbar.forward(), sync_mode()))
+        pan_btn = tool_button("Pan", lambda: (toolbar.pan(), sync_mode()))
+        zoom_btn = tool_button("Zoom", lambda: (toolbar.zoom(), sync_mode()))
+        tool_button("Save PNG", lambda: self._save_figure_dialog(fig, title))
+        sync_mode()
+
+        canvas.draw()
+        widget = canvas.get_tk_widget()
+        widget.configure(bg=PLOT_FACE, highlightthickness=0, bd=0)
+        widget.pack(fill="both", expand=True, padx=12, pady=12)
 
     # ------------------------------------------------------------------
     #  STATUS / EMPTY STATE
@@ -1672,7 +2061,7 @@ class VallierApp:
 
     def _embed_figure(self, tab_key, fig, title, subtitle):
         self._clear_plot_tab(tab_key)
-        shell = self._card(self.plot_tabs[tab_key], bg=CARD_BG, border=STROKE, padx=18, pady=18)
+        shell = self._card(self.plot_tabs[tab_key], bg=CARD_BG, border=STROKE, padx=20, pady=20)
         shell.pack(fill="both", expand=True, padx=16, pady=16)
 
         head = tk.Frame(shell, bg=CARD_BG)
@@ -1683,8 +2072,11 @@ class VallierApp:
         tk.Label(left, text=title, bg=CARD_BG, fg=TEXT, font=("Segoe UI", 18, "bold")).pack(anchor="w")
         tk.Label(left, text=subtitle, bg=CARD_BG, fg=TEXT_SOFT, font=("Segoe UI", 10)).pack(anchor="w", pady=(5, 0))
 
-        canvas = FigureCanvasTkAgg(fig, master=shell)
-        toolbar = NavigationToolbar2Tk(canvas, shell, pack_toolbar=False)
+        canvas_host = tk.Frame(shell, bg=PLOT_FACE, highlightthickness=1, highlightbackground=STROKE_SOFT, bd=0)
+        canvas_host.pack(fill="both", expand=True, pady=(16, 0))
+
+        canvas = FigureCanvasTkAgg(fig, master=canvas_host)
+        toolbar = NavigationToolbar2Tk(canvas, canvas_host, pack_toolbar=False)
 
         tool_row = tk.Frame(head, bg=CARD_BG)
         tool_row.pack(side="right", anchor="n")
@@ -1716,35 +2108,35 @@ class VallierApp:
             pan_btn.configure(bg=(PILL_BG if pan_active else PILL_NEUTRAL), fg=(ACCENT if pan_active else TEXT))
             zoom_btn.configure(bg=(PILL_BG if zoom_active else PILL_NEUTRAL), fg=(ACCENT if zoom_active else TEXT))
 
-        home_btn = tool_button("Home", lambda: (toolbar.home(), sync_mode()))
-        back_btn = tool_button("Back", lambda: (toolbar.back(), sync_mode()))
-        fwd_btn = tool_button("Forward", lambda: (toolbar.forward(), sync_mode()))
+        tool_button("Home", lambda: (toolbar.home(), sync_mode()))
+        tool_button("Back", lambda: (toolbar.back(), sync_mode()))
+        tool_button("Forward", lambda: (toolbar.forward(), sync_mode()))
         pan_btn = tool_button("Pan", lambda: (toolbar.pan(), sync_mode()))
         zoom_btn = tool_button("Zoom", lambda: (toolbar.zoom(), sync_mode()))
-        save_btn = tool_button("Save PNG", toolbar.save_figure)
+        tool_button("Open Window", lambda: self._open_plot_window(tab_key))
+        tool_button("Save PNG", lambda: self._save_figure_dialog(fig, title))
         sync_mode()
 
         canvas.draw()
         widget = canvas.get_tk_widget()
         widget.configure(bg=PLOT_FACE, highlightthickness=0, bd=0)
-        widget.pack(fill="both", expand=True, pady=(16, 0))
+        widget.pack(fill="both", expand=True, padx=12, pady=12)
 
-    def _update_plots(self):
+    def _build_pressure_velocity_figure(self):
         r = self.results
         tms = r["tms"]
         t_exit = r["t_exit_ms"]
         t_pmax = r["t_Pmax_ms"]
         x_pmax = r["x_Pmax_mm"]
+        x_mm = r["X1_mm"]
 
-        # Pressure & Velocity
-        fig, axes = self._make_figure(2, 2, figsize=(12.6, 7.3))
+        fig, axes = self._make_figure(2, 2, figsize=(13.6, 8.0))
         ax1, ax2, ax3, ax4 = axes
 
         p_t = r["Pres"] / 1e6
         v_t = r["Velo"]
         p_x = r["P1"] / 1e6
         v_x = r["Vel1"]
-        x_mm = r["X1_mm"]
 
         ax1.plot(tms, p_t, color=CHART_RED, linewidth=2.2)
         ax1.fill_between(tms, 0, p_t, color=CHART_RED, alpha=0.12)
@@ -1774,34 +2166,27 @@ class VallierApp:
         ax4.set_title("In-Bore Velocity")
         ax4.set_xlabel("Travel [mm]")
         ax4.set_ylabel("Velocity [m/s]")
+        return fig
 
-        self._embed_figure(
-            "pv",
-            fig,
-            "Pressure & Velocity",
-            "Dashed line marks the pressure peak; dotted line marks projectile exit in time-domain charts.",
-        )
-
-        # Temperature
-        fig, axes = self._make_figure(1, 1, figsize=(12.6, 5.7))
+    def _build_temperature_figure(self):
+        r = self.results
+        fig, axes = self._make_figure(1, 1, figsize=(13.4, 6.0))
         ax = axes[0]
         temp = r["Temp"]
+        tms = r["tms"]
+        t_exit = r["t_exit_ms"]
         ax.plot(tms, temp, color=CHART_ORANGE, linewidth=2.3)
         ax.fill_between(tms, np.min(temp), temp, color=CHART_ORANGE, alpha=0.14)
         ax.axvline(t_exit, color=CHART_GOLD, linewidth=1.2, linestyle=":")
         ax.set_title("Gas Temperature vs Time")
         ax.set_xlabel("Time [ms]")
         ax.set_ylabel("Temperature [K]")
+        return fig
 
-        self._embed_figure(
-            "temp",
-            fig,
-            "Temperature",
-            "In-bore temperature evolution with post-muzzle decay.",
-        )
-
-        # Spin & Torque
-        fig, axes = self._make_figure(1, 3, figsize=(14.8, 5.1))
+    def _build_spin_figure(self):
+        r = self.results
+        x_mm = r["X1_mm"]
+        fig, axes = self._make_figure(1, 3, figsize=(15.6, 5.8))
         ax1, ax2, ax3 = axes
 
         ax1.plot(x_mm, r["omega"], color=CHART_GREEN, linewidth=2.2)
@@ -1824,16 +2209,12 @@ class VallierApp:
         ax3.set_title("Angular Acceleration")
         ax3.set_xlabel("Travel [mm]")
         ax3.set_ylabel("θ̈ [rad/s²]")
+        return fig
 
-        self._embed_figure(
-            "spin",
-            fig,
-            "Spin & Torque",
-            "Comparison of the full torque expression and the I·α form.",
-        )
-
-        # Groove & Twist
-        fig, axes = self._make_figure(1, 2, figsize=(13.4, 5.3))
+    def _build_groove_figure(self):
+        r = self.results
+        x_mm = r["X1_mm"]
+        fig, axes = self._make_figure(1, 2, figsize=(14.8, 5.8))
         ax1, ax2 = axes
 
         ax1.plot(x_mm, r["Y"], color=CHART_TEAL, linewidth=2.3)
@@ -1847,16 +2228,12 @@ class VallierApp:
         ax2.set_title("Twist Angle")
         ax2.set_xlabel("Travel [mm]")
         ax2.set_ylabel("α [deg]")
+        return fig
 
-        self._embed_figure(
-            "groove",
-            fig,
-            "Groove & Twist",
-            "Rifling profile and twist-angle development along the bore.",
-        )
-
-        # Force & Impulse
-        fig, axes = self._make_figure(1, 2, figsize=(13.4, 5.3))
+    def _build_force_figure(self):
+        r = self.results
+        tms = r["tms"]
+        fig, axes = self._make_figure(1, 2, figsize=(14.8, 5.8))
         ax1, ax2 = axes
 
         ax1.plot(tms, r["Force_all"], color=CHART_RED, linewidth=2.1)
@@ -1871,13 +2248,28 @@ class VallierApp:
         ax2.set_title("Impulse Region")
         ax2.set_xlabel("Time [ms]")
         ax2.set_ylabel("Force [N]")
+        return fig
 
-        self._embed_figure(
-            "force",
-            fig,
-            "Force & Impulse",
-            f"Impulse is integrated up to tₑ = {r['t_e']:.3f} ms.",
-        )
+    def _update_plots(self):
+        self.plot_builders = {
+            "pv": self._build_pressure_velocity_figure,
+            "temp": self._build_temperature_figure,
+            "spin": self._build_spin_figure,
+            "groove": self._build_groove_figure,
+            "force": self._build_force_figure,
+        }
+        self.plot_meta = {
+            "pv": ("Pressure & Velocity", "Dashed line marks the pressure peak; dotted line marks projectile exit in time-domain charts."),
+            "temp": ("Temperature", "In-bore temperature evolution with post-muzzle decay."),
+            "spin": ("Spin & Torque", "Comparison of the full torque expression and the I·α form."),
+            "groove": ("Groove & Twist", "Rifling profile and twist-angle development along the bore."),
+            "force": ("Force & Impulse", f"Impulse is integrated up to tₑ = {self.results['t_e']:.3f} ms."),
+        }
+
+        for key, builder in self.plot_builders.items():
+            title, subtitle = self.plot_meta[key]
+            self._embed_figure(key, builder(), title, subtitle)
+
 
 
 # ============================================================================
